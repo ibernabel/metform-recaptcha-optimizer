@@ -3,7 +3,7 @@
  * Plugin Name: MetForm reCAPTCHA Performance Optimizer
  * Plugin URI: https://github.com/ibernabel/metform-recaptcha-optimizer
  * Description: Defers MetForm reCAPTCHA loading to improve PageSpeed scores. Loads reCAPTCHA only on user interaction (scroll, click, touch) for better performance without compromising functionality.
- * Version: 1.0.0
+ * Version: 1.1.1
  * Requires at least: 5.8
  * Requires PHP: 7.4
  * Author: Idequel Bernabel
@@ -131,6 +131,38 @@ class MetForm_reCAPTCHA_Optimizer {
             'use strict';
             
             var recaptchaLoaded = false;
+            var mutationObserver = null;
+            
+            /**
+             * Block dynamically added reCAPTCHA scripts
+             */
+            function blockDynamicScripts() {
+                if (!mutationObserver) {
+                    mutationObserver = new MutationObserver(function(mutations) {
+                        mutations.forEach(function(mutation) {
+                            mutation.addedNodes.forEach(function(node) {
+                                // Check if it's a script element
+                                if (node.tagName === 'SCRIPT' && node.src) {
+                                    // Check if it's a reCAPTCHA script
+                                    if (node.src.indexOf('recaptcha') !== -1 || 
+                                        node.src.indexOf('gstatic.com') !== -1) {
+                                        
+                                        // Mark it as deferred
+                                        node.setAttribute('data-recaptcha-defer', 'true');
+                                        node.type = 'text/plain';
+                                    }
+                                }
+                            });
+                        });
+                    });
+                    
+                    // Start observing
+                    mutationObserver.observe(document.documentElement, {
+                        childList: true,
+                        subtree: true
+                    });
+                }
+            }
             
             /**
              * Load reCAPTCHA scripts
@@ -142,35 +174,60 @@ class MetForm_reCAPTCHA_Optimizer {
                 
                 recaptchaLoaded = true;
                 
+                // Stop blocking dynamic scripts
+                if (mutationObserver) {
+                    mutationObserver.disconnect();
+                }
+                
                 // Find all deferred reCAPTCHA scripts
                 var scripts = document.querySelectorAll('script[data-recaptcha-defer="true"]');
                 
                 scripts.forEach(function(oldScript) {
-                    if (!oldScript.src) {
+                    var src = oldScript.src || oldScript.getAttribute('src');
+                    
+                    if (!src) {
                         return;
                     }
                     
                     // Create new script element
                     var newScript = document.createElement('script');
-                    newScript.src = oldScript.src;
+                    newScript.src = src;
                     newScript.async = true;
                     
-                    // Copy attributes
+                    // Copy attributes (except the blocking ones)
                     Array.from(oldScript.attributes).forEach(function(attr) {
-                        if (attr.name !== 'src' && attr.name !== 'data-recaptcha-defer') {
+                        if (attr.name !== 'src' && 
+                            attr.name !== 'data-recaptcha-defer' && 
+                            attr.name !== 'type') {
                             newScript.setAttribute(attr.name, attr.value);
                         }
                     });
                     
-                    // Append to head
-                    document.head.appendChild(newScript);
+                    // Replace old script
+                    if (oldScript.parentNode) {
+                        oldScript.parentNode.replaceChild(newScript, oldScript);
+                    } else {
+                        document.head.appendChild(newScript);
+                    }
                 });
+                
+                // Initialize grecaptcha after loading
+                setTimeout(function() {
+                    if (typeof grecaptcha !== 'undefined' && grecaptcha.ready) {
+                        grecaptcha.ready(function() {
+                            // reCAPTCHA is ready
+                        });
+                    }
+                }, 1000);
                 
                 // Dispatch custom event for other scripts that may need it
                 if (typeof Event === 'function') {
                     window.dispatchEvent(new Event('recaptchaLoaded'));
                 }
             }
+            
+            // Start blocking dynamic scripts immediately
+            blockDynamicScripts();
             
             // Event types that trigger loading
             var events = ['scroll', 'click', 'touchstart', 'mousemove', 'keydown'];
@@ -183,8 +240,8 @@ class MetForm_reCAPTCHA_Optimizer {
                 });
             });
             
-            // Fallback: load after 5 seconds if no interaction
-            setTimeout(loadRecaptcha, 5000);
+            // Fallback: load after 10 seconds if no interaction
+            setTimeout(loadRecaptcha, 10000);
             
         })();
         </script>
